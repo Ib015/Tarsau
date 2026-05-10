@@ -91,3 +91,85 @@ int archive_files(int file_count, char *files[], const char *output_file) {
     printf("Dosyalar birleştirildi. Arşiv oluşturuldu: %s\n", output_file);
     return 0;
 }
+
+int extract_archive(const char *archive_file, const char *target_dir) {
+    FILE *in = fopen(archive_file, "r");
+    if (!in) {
+        printf("Arşiv dosyası uygunsuz veya bozuk!\n");
+        return 1;
+    }
+
+    // 1. İlk 10 baytı oku (Organizasyon uzunluğu)
+    char header_len_str[11];
+    if (fread(header_len_str, 1, 10, in) != 10) {
+        printf("Arşiv dosyası uygunsuz veya bozuk!\n");
+        fclose(in);
+        return 1;
+    }
+    header_len_str[10] = '\0';
+    int header_length = atoi(header_len_str); 
+
+    // 2. Organizasyon (Header) metnini oku
+    char *header = malloc(header_length + 1);
+    if (fread(header, 1, header_length, in) != header_length) {
+        printf("Arşiv dosyası uygunsuz veya bozuk!\n");
+        free(header); 
+        fclose(in); 
+        return 1;
+    }
+    header[header_length] = '\0';
+
+    // 3. Kullanıcı bir dizin belirttiyse onu oluştur (0777 standart klasör iznidir)
+    if (target_dir) {
+        mkdir(target_dir, 0777); 
+    }
+
+    // 4. Header'ı parçala ve dosyaları çıkart
+    char *token = strtok(header, "|");
+    
+    while (token != NULL) {
+        char filename[256];
+        int perms;
+        long size;
+        
+        // Kimlik kartını oku: İsim, İzin (Oktal), Boyut
+        if (sscanf(token, "%[^,],%o,%ld", filename, &perms, &size) == 3) {
+            
+            char filepath[1024];
+            if (target_dir) {
+                sprintf(filepath, "%s/%s", target_dir, filename);
+            } else {
+                strcpy(filepath, filename);
+            }
+
+            FILE *out = fopen(filepath, "w");
+            if (out) {
+                char buffer[1024];
+                long remaining = size;
+                while (remaining > 0) {
+                    size_t to_read = (remaining < sizeof(buffer)) ? remaining : sizeof(buffer);
+                    size_t bytes_read = fread(buffer, 1, to_read, in);
+                    if (bytes_read == 0) break; 
+                    
+                    fwrite(buffer, 1, bytes_read, out);
+                    remaining -= bytes_read;
+                }
+                fclose(out);
+                
+                // Orijinal dosya izinlerini (0664 vs.) geri yükle
+                chmod(filepath, perms);
+            }
+        }
+        token = strtok(NULL, "|");
+    }
+
+    free(header);
+    fclose(in);
+    
+    if (target_dir) {
+        printf("%s dizininde dosyalar açıldı.\n", target_dir);
+    } else {
+        printf("Geçerli dizinde dosyalar açıldı.\n");
+    }
+    return 0;
+}
