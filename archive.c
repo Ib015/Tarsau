@@ -1,105 +1,92 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/stat.h> // stat() için gerekli
+#include <sys/stat.h>
+#include <sys/types.h>
 #include "archive.h"
 
-// Dosyanın metin dosyası olup olmadığını kontrol eden yardımcı fonksiyon
-// Basitçe dosyanın içinde NULL bayt (\0) arar. Varsa binary kabul eder.
-int is_text_file(const char *filename) {
-    FILE *f = fopen(filename, "r");
-    if (!f) return 0;
-    int ch;
-    // Performans için sadece ilk 1024 baytı kontrol edelim
-    for(int i = 0; i < 1024 && (ch = fgetc(f)) != EOF; i++) {
-        if (ch == 0) { 
-            fclose(f);
-            return 0; 
-        }
-    }
-    fclose(f);
-    return 1;
-}
-
 int archive_files(int file_count, char *files[], const char *output_file) {
-    if (file_count == 0) {
-        printf("Hata: Arşivlenecek dosya belirtilmedi.\n");
-        return 1;
-    }
-
     long total_size = 0;
-    char header_info[8192] = ""; // Organizasyon (header) stringini tutacak tampon
-    struct stat st;
 
-    // 1. ADIM: DOSYALARI KONTROL ET VE HEADER METNİNİ OLUŞTUR
+    // 1. HOCA KRİTERLERİ KONTROLÜ: ASCII ve 200 MB Sınırı
     for (int i = 0; i < file_count; i++) {
-        // stat() ile dosyanın metadata bilgilerini çek
-        if (stat(files[i], &st) != 0) {
-            printf("Hata: %s dosyasi okunamadi veya bulunamadi.\n", files[i]);
+        FILE *f = fopen(files[i], "rb");
+        if (!f) {
+            printf("Hata: %s dosyası açılamadı!\n", files[i]);
             return 1;
         }
 
-        // Metin dosyası mı kontrolü
-        if (!is_text_file(files[i])) {
-            printf("%s giriş dosyasının formatı uyumsuzdur!\n", files[i]);
-            return 1;
+        int c;
+        long f_size = 0;
+        while ((c = fgetc(f)) != EOF) {
+            f_size++;
+            // Karakter başına 1 bayt ve ASCII (0-127) kontrolü
+            if (c < 0 || c > 127) {
+                printf("%s giriş dosyasının formatı uyumsuzdur!\n", files[i]);
+                fclose(f);
+                return 1;
+            }
         }
-
-        total_size += st.st_size;
-        // 200 MB Sınırı (200 * 1024 * 1024 bayt)
-        if (total_size > 209715200) {
-            printf("Hata: Dosyalarin toplam boyutu 200 MB'i gecemez.\n");
-            return 1;
-        }
-
-        // Dosya izinlerini oktal formata çek (Örn: 0644)
-        int permissions = st.st_mode & 0777;
-
-        // Formata uygun string oluştur ve header_info tamponuna ekle
-        char record[256];
-        sprintf(record, "|%s,%04o,%ld|", files[i], permissions, st.st_size);
-        strcat(header_info, record);
+        fclose(f);
+        total_size += f_size;
     }
 
-    // 2. ADIM: .SAU DOSYASINA YAZMA İŞLEMİ
-    FILE *out = fopen(output_file, "w");
-    if (!out) {
-        printf("Hata: %s cikti dosyasi olusturulamadi.\n", output_file);
+    // Toplam boyut 200 MB (200 * 1024 * 1024 bayt) sınırı kontrolü
+    if (total_size > 209715200) {
+        printf("Hata: Giriş dosyalarının toplam boyutu 200 MB'ı geçemez!\n");
         return 1;
     }
 
-    // İlk 10 bayta organizasyon kısmının uzunluğunu yaz (Sıfır dolgulu, örn: 0000000125)
-    int header_length = strlen(header_info);
-    fprintf(out, "%010d", header_length);
-    
-    // Ardından | ile ayrılmış organizasyon bilgilerini yaz
-    fprintf(out, "%s", header_info);
+    // 2. ARŞİVLEME İŞLEMİ
+    FILE *out = fopen(output_file, "wb");
+    if (!out) {
+        printf("Hata: Çıktı dosyası oluşturulamadı!\n");
+        return 1;
+    }
 
-    // 3. ADIM: DOSYA İÇERİKLERİNİ ARŞİVE AKTAR
+    // Organizasyon (Header) metnini oluşturma
+    char header[4096] = "";
     for (int i = 0; i < file_count; i++) {
-        FILE *in = fopen(files[i], "r");
-        char buffer[1024];
-        size_t bytes;
-        // Dosyayı 1'er KB'lık parçalar halinde okuyup arşive aktar
-        while ((bytes = fread(buffer, 1, sizeof(buffer), in)) > 0) {
-            fwrite(buffer, 1, bytes, out);
+        struct stat st;
+        if (stat(files[i], &st) == 0) {
+            char entry[256];
+            // Dosya adı, izinler (oktal) ve boyut yazımı
+            sprintf(entry, "%s,%o,%ld|", files[i], st.st_mode & 0777, st.st_size);
+            strcat(header, entry);
         }
-        fclose(in);
+    }
+
+    int header_length = strlen(header);
+    // İlk 10 bayta organizasyon bölümünün boyutunu yazıyoruz
+    fprintf(out, "%010d", header_length);
+    fwrite(header, 1, header_length, out);
+
+    // Dosya içeriklerini ardı ardına ekleme
+    for (int i = 0; i < file_count; i++) {
+        FILE *f = fopen(files[i], "rb");
+        if (f) {
+            char buffer[1024];
+            size_t bytes_read;
+            while ((bytes_read = fread(buffer, 1, sizeof(buffer), f)) > 0) {
+                fwrite(buffer, 1, bytes_read, out);
+            }
+            fclose(f);
+        }
     }
 
     fclose(out);
-    printf("Dosyalar birleştirildi. Arşiv oluşturuldu: %s\n", output_file);
+    printf("Dosyalar birleştirildi.\n");
     return 0;
 }
 
 int extract_archive(const char *archive_file, const char *target_dir) {
-    FILE *in = fopen(archive_file, "r");
+    FILE *in = fopen(archive_file, "rb");
     if (!in) {
         printf("Arşiv dosyası uygunsuz veya bozuk!\n");
         return 1;
     }
 
-    // 1. İlk 10 baytı oku (Organizasyon uzunluğu)
+    // İlk 10 baytı oku (Organizasyon uzunluğu)
     char header_len_str[11];
     if (fread(header_len_str, 1, 10, in) != 10) {
         printf("Arşiv dosyası uygunsuz veya bozuk!\n");
@@ -109,9 +96,9 @@ int extract_archive(const char *archive_file, const char *target_dir) {
     header_len_str[10] = '\0';
     int header_length = atoi(header_len_str); 
 
-    // 2. Organizasyon (Header) metnini oku
+    // Organizasyon (Header) metnini oku
     char *header = malloc(header_length + 1);
-    if (fread(header, 1, header_length, in) != header_length) {
+    if (fread(header, 1, header_length, in) != (size_t)header_length) {
         printf("Arşiv dosyası uygunsuz veya bozuk!\n");
         free(header); 
         fclose(in); 
@@ -119,22 +106,23 @@ int extract_archive(const char *archive_file, const char *target_dir) {
     }
     header[header_length] = '\0';
 
-    // 3. Kullanıcı bir dizin belirttiyse onu oluştur (0777 standart klasör iznidir)
+    // Dizin oluşturma
     if (target_dir) {
-        mkdir(target_dir, 0777); 
+        #ifdef _WIN32
+            mkdir(target_dir);
+        #else
+            mkdir(target_dir, 0777); 
+        #endif
     }
 
-    // 4. Header'ı parçala ve dosyaları çıkart
+    // Header'ı parçala ve dosyaları çıkart
     char *token = strtok(header, "|");
-    
     while (token != NULL) {
         char filename[256];
         int perms;
         long size;
         
-        // Kimlik kartını oku: İsim, İzin (Oktal), Boyut
         if (sscanf(token, "%[^,],%o,%ld", filename, &perms, &size) == 3) {
-            
             char filepath[1024];
             if (target_dir) {
                 sprintf(filepath, "%s/%s", target_dir, filename);
@@ -142,12 +130,12 @@ int extract_archive(const char *archive_file, const char *target_dir) {
                 strcpy(filepath, filename);
             }
 
-            FILE *out = fopen(filepath, "w");
+            FILE *out = fopen(filepath, "wb");
             if (out) {
                 char buffer[1024];
                 long remaining = size;
                 while (remaining > 0) {
-                    size_t to_read = (remaining < sizeof(buffer)) ? remaining : sizeof(buffer);
+                    size_t to_read = ((size_t)remaining < sizeof(buffer)) ? (size_t)remaining : sizeof(buffer);
                     size_t bytes_read = fread(buffer, 1, to_read, in);
                     if (bytes_read == 0) break; 
                     
@@ -156,8 +144,9 @@ int extract_archive(const char *archive_file, const char *target_dir) {
                 }
                 fclose(out);
                 
-                // Orijinal dosya izinlerini (0664 vs.) geri yükle
-                chmod(filepath, perms);
+                #ifndef _WIN32
+                    chmod(filepath, perms);
+                #endif
             }
         }
         token = strtok(NULL, "|");

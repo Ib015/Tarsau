@@ -32,16 +32,21 @@ int main(int argc, char *argv[]) {
         return archive_files(file_count, input_files, output_file);
         
     } else if (strcmp(argv[1], "-a") == 0) {
-        // -a komutunun argüman kontrolleri
         if (argc < 3 || argc > 4) {
             printf("Kullanım: tarsau -a [arsiv_adi] [opsiyonel_hedef_dizin]\n");
             return 1;
         }
         
         const char *archive_file = argv[2];
-        // Eğer 4. argüman varsa dizin adıdır, yoksa NULL gönderiyoruz
-        const char *target_dir = (argc == 4) ? argv[3] : NULL;
         
+        //Uzantı .sau kontrolü
+        int len = strlen(archive_file);
+        if (len < 5 || strcmp(&archive_file[len - 4], ".sau") != 0) {
+            printf("Arşiv dosyası uygunsuz veya bozuk!\n");
+            return 1;
+        }
+        
+        const char *target_dir = (argc == 4) ? argv[3] : NULL;
         return extract_archive(archive_file, target_dir);
 
     } else {
