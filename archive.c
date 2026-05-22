@@ -8,7 +8,7 @@
 int archive_files(int file_count, char *files[], const char *output_file) {
     long total_size = 0;
 
-    // 1. HOCA KRİTERLERİ KONTROLÜ: ASCII ve 200 MB Sınırı
+    // ASCII ve 200 MB Sınırı
     for (int i = 0; i < file_count; i++) {
         FILE *f = fopen(files[i], "rb");
         if (!f) {
@@ -31,7 +31,7 @@ int archive_files(int file_count, char *files[], const char *output_file) {
         total_size += f_size;
     }
 
-    // Toplam boyut 200 MB (200 * 1024 * 1024 bayt) sınırı kontrolü
+    // Toplam boyut 200 MB kontrolü
     if (total_size > 209715200) {
         printf("Hata: Giriş dosyalarının toplam boyutu 200 MB'ı geçemez!\n");
         return 1;
